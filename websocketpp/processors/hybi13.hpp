@@ -478,7 +478,10 @@ public:
                 size_t bytes_to_process = (std::min)(m_bytes_needed,len-p);
 
                 if (bytes_to_process > 0) {
-                    p += this->process_payload_bytes(buf+p,bytes_to_process,ec);
+                    p += this->process_payload_bytes(buf+p,bytes_to_process,
+                                                     &m_current_msg->unmask_buf[0],
+                                                     sizeof(msg_metadata::unmask_buf),
+                                                     ec);
 
                     if (ec) {break;}
                 }
@@ -835,6 +838,79 @@ protected:
         return len;
     }
 
+    /// Reads bytes from buf into message payload
+    /**
+     * This function performs unmasking and uncompression, validates the
+     * decoded bytes, and writes them to the appropriate message buffer.
+     *
+     * This member function will use the output buffer as stratch space for its
+     * work. The raw input bytes will be preserved. This applies only to the
+     * bytes actually needed. At most min(m_bytes_needed,len) will be processed.
+     *
+     * @param data Input buffer
+     * @param len Length of data
+     * @param buf Working buffer
+     * @param buf_size Size of buf
+     * @return Number of bytes processed or zero in case of an error
+     */
+    size_t process_payload_bytes(uint8_t *data, size_t len, uint8_t *buf, size_t buf_size, lib::error_code& ec)
+    {
+        uint8_t *ptr = data;
+        const uint8_t *end = ptr + len;
+
+        while (ptr != end) {
+            size_t n = std::min(static_cast<size_t>(end - ptr), buf_size);
+            size_t res = process_payload_bytes(ptr, buf, n, ec);
+            if (res == 0) {
+                return res;
+            }
+            ptr += res;
+        }
+        return len;
+    }
+
+    size_t process_payload_bytes(uint8_t * input, uint8_t * output, size_t len, lib::error_code& ec)
+    {
+        // unmask if masked
+        if (frame::get_masked(m_basic_header)) {
+            m_current_msg->prepared_key = frame::byte_mask_circ(
+                input, output, len, m_current_msg->prepared_key);
+            // TODO: SIMD masking
+        } else {
+            // Use input buffer as output one if original data won't be modified
+            output = input;
+        }
+
+        std::string & out = m_current_msg->msg_ptr->get_raw_payload();
+        size_t offset = out.size();
+
+        // decompress message if needed.
+        if (m_permessage_deflate.is_enabled()
+            && m_current_msg->msg_ptr->get_compressed())
+        {
+            // Decompress current buffer into the message buffer
+            ec = m_permessage_deflate.decompress(output,len,out);
+            if (ec) {
+                return 0;
+            }
+        } else {
+            // No compression, straight copy
+            out.append(reinterpret_cast<char *>(output),len);
+        }
+
+        // validate unmasked, decompressed values
+        if (m_current_msg->msg_ptr->get_opcode() == frame::opcode::TEXT) {
+            if (!m_current_msg->validator.decode(out.begin()+offset,out.end())) {
+                ec = make_error_code(error::invalid_utf8);
+                return 0;
+            }
+        }
+
+        m_bytes_needed -= len;
+
+        return len;
+    }
+
     /// Validate an incoming basic header
     /**
      * Validates an incoming hybi13 basic header.
@@ -1038,6 +1114,8 @@ protected:
         message_ptr msg_ptr;        // pointer to the message data buffer
         size_t      prepared_key;   // prepared masking key
         utf8_validator::validator validator; // utf8 validation state
+
+        uint8_t unmask_buf[1024];
     };
 
     // Basic header of the frame being read
