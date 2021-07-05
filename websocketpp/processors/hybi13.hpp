@@ -585,6 +585,10 @@ public:
         return ret;
     }
 
+    bool is_data_message_parsing_in_progress() const {
+        return (m_data_msg.msg_ptr != nullptr);
+    }
+
     /// Test whether or not the processor is in a fatal error state.
     bool get_error() const {
         return m_state == FATAL_ERROR;
