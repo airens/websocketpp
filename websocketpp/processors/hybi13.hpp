@@ -478,7 +478,7 @@ public:
                 size_t bytes_to_process = (std::min)(m_bytes_needed,len-p);
 
                 if (bytes_to_process > 0) {
-                    p += this->process_payload_bytes((const uint8_t *)buf+p,bytes_to_process,ec);
+                    p += this->process_payload_bytes(buf+p,bytes_to_process,ec);
 
                     if (ec) {break;}
                 }
@@ -785,58 +785,6 @@ protected:
         m_bytes_needed -= bytes_to_read;
 
         return bytes_to_read;
-    }
-
-    /// Reads bytes from buf into message payload
-    /**
-     * This function performs unmasking and uncompression, validates the
-     * decoded bytes, and writes them to the appropriate message buffer.
-     *
-     * This member function will use the input buffer as stratch space for its
-     * work. The raw input bytes will not be preserved. This applies only to the
-     * bytes actually needed. At most min(m_bytes_needed,len) will be processed.
-     *
-     * @param buf Input/working buffer
-     * @param len Length of buf
-     * @return Number of bytes processed or zero in case of an error
-     */
-    size_t process_payload_bytes(uint8_t * buf, size_t len, lib::error_code& ec)
-    {
-        // unmask if masked
-        if (frame::get_masked(m_basic_header)) {
-            m_current_msg->prepared_key = frame::byte_mask_circ(
-                buf, len, m_current_msg->prepared_key);
-            // TODO: SIMD masking
-        }
-
-        std::string & out = m_current_msg->msg_ptr->get_raw_payload();
-        size_t offset = out.size();
-
-        // decompress message if needed.
-        if (m_permessage_deflate.is_enabled()
-            && m_current_msg->msg_ptr->get_compressed())
-        {
-            // Decompress current buffer into the message buffer
-            ec = m_permessage_deflate.decompress(buf,len,out);
-            if (ec) {
-                return 0;
-            }
-        } else {
-            // No compression, straight copy
-            out.append(reinterpret_cast<char *>(buf),len);
-        }
-
-        // validate unmasked, decompressed values
-        if (m_current_msg->msg_ptr->get_opcode() == frame::opcode::TEXT) {
-            if (!m_current_msg->validator.decode(out.begin()+offset,out.end())) {
-                ec = make_error_code(error::invalid_utf8);
-                return 0;
-            }
-        }
-
-        m_bytes_needed -= len;
-
-        return len;
     }
 
     /// Reads bytes from buf into message payload
