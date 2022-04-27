@@ -40,6 +40,8 @@
 #include <websocketpp/common/network.hpp>
 #include <websocketpp/common/platforms.hpp>
 
+#include <websocketpp/http/parser.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <string>
@@ -112,6 +114,89 @@ public:
         http::parameter_list p;
 
         bool error = header.get_header_as_plist("Sec-WebSocket-Extensions",p);
+
+        if (error) {
+            ret.first = make_error_code(error::extension_parse_error);
+            return ret;
+        }
+
+        // If there are no extensions parsed then we are done!
+        if (p.size() == 0) {
+            return ret;
+        }
+
+        http::parameter_list::const_iterator it;
+
+        // look through the list of extension requests to find the first
+        // one that we can accept.
+        if (m_permessage_deflate.is_implemented()) {
+            err_str_pair neg_ret;
+            for (it = p.begin(); it != p.end(); ++it) {
+                // not a permessage-deflate extension request, ignore
+                if (it->first != "permessage-deflate") {
+                    continue;
+                }
+
+                // if we have already successfully negotiated this extension
+                // then skip any other requests to negotiate the same one
+                // with different parameters 
+                if (m_permessage_deflate.is_enabled()) {
+                    continue;
+                }
+                
+                // attempt to negotiate this offer
+                neg_ret = m_permessage_deflate.negotiate(it->second);
+
+                if (neg_ret.first) {
+                    // negotiation offer failed. Do nothing. We will continue
+                    // searching for a permessage-deflate config that succeeds
+                    continue;
+                }
+
+                // Negotiation tentatively succeeded
+
+                // Actually try to initialize the extension before we
+                // deem negotiation complete
+                lib::error_code ec = m_permessage_deflate.init(base::m_server);
+
+                if (ec) {
+                    // Negotiation succeeded but initialization failed this is 
+                    // an error that should stop negotiation of permessage 
+                    // deflate. Return the reason for the init failure
+
+                    ret.first = ec;
+                    break;
+                } else {
+                    // Successfully initialized, push the negotiated response into
+                    // the reply and stop looking for additional permessage-deflate
+                    // extensions
+                    ret.second += neg_ret.second;
+                    break;
+                }
+            }
+        }
+
+        // support for future extensions would go here. Should check the value of 
+        // ret.first before continuing. Might need to consider whether failure of
+        // negotiation of an earlier extension should stop negotiation of subsequent
+        // ones
+
+        return ret;
+    }
+
+    err_str_pair negotiate_extensions_helper(std::string_view header_value) {
+        err_str_pair ret;
+
+        // Respect blanket disabling of all extensions and don't even parse
+        // the extension header
+        if (!config::enable_extensions) {
+            ret.first = make_error_code(error::extensions_disabled);
+            return ret;
+        }
+
+        http::parameter_list p;
+
+        bool error = ::websocketpp::http::parser::parse_parameter_list(header_value,p);
 
         if (error) {
             ret.first = make_error_code(error::extension_parse_error);
