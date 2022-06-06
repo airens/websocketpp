@@ -376,6 +376,17 @@ InputIterator extract_parameters(InputIterator begin, InputIterator end,
     return cursor;
 }
 
+inline bool parse_parameter_list(std::string_view in, parameter_list & out)
+{
+    if (in.size() == 0) {
+        return false;
+    }
+
+    std::string_view::const_iterator it;
+    it = extract_parameters(in.begin(),in.end(),out);
+    return (it == in.begin());
+}
+
 inline std::string strip_lws(std::string const & input) {
     std::string::const_iterator begin = extract_all_lws(input.begin(),input.end());
     if (begin == input.end()) {
